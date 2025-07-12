@@ -4,12 +4,29 @@ import tokenize
 import ast
 import io
 import keyword
+import matplotlib
+from collections import defaultdict
+matplotlib.use('TkAgg')  
+from typing import Dict, List
+import matplotlib.pyplot as plt
 import builtins
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.downloader.Z_U_F import load_codebase
 
 
-# Dynamically get all reserved keywords and built-in functions
+#code_files = load_codebase(r"C:\Users\Yatharth_Shivam\OneDrive\Documents\repos\seering\src")
+
+#file_path = r"C:\Users\Yatharth_Shivam\OneDrive\Documents\repos\seering\src\downloader\Z_U_F.py"  # use the exact key as printed
+#code_content = code_files.get(file_path)
+
+#if code_content:
+ #   code_lines = code_content.splitlines()
+  #  for i, line in enumerate(code_lines, start=1):
+  #      print(f"{i:03}: {line}")
+#else:
+ #   print("File not found in codebase.")
+
+
 RESERVED_WORDS = set(keyword.kwlist)
 INBUILT_FUNCTIONS = set(dir(builtins))
 INBUILT_DATASTRUCTURES = {
@@ -248,37 +265,137 @@ class hello:
 
 """
 
-def build_dependency_graph(codebase_path):
-    graph = nx.DiGraph()
-    code_files = load_codebase(codebase_path)
 
-    file_to_functions = {}  # Track which file defines which user funcs
 
-    for filepath, code in code_files.items():
-        analysis = CodeAnalyzer(code)
 
-        file_node = os.path.relpath(filepath, codebase_path)
-        graph.add_node(file_node, type="file")
 
-        # Track user-defined functions/classes
-        user_funcs = {f["name"] for f in analysis.get("functions", [])}
-        user_classes = {c["name"] for c in analysis.get("classes", [])}
-        file_to_functions[file_node] = user_funcs.union(user_classes)
+class DependencyGraph:
+    def __init__(self, base_path):
+        self.base_path = base_path
+        self.graph = nx.DiGraph()
+        self.parsed = {}
+        self.file_module_map = {}
+        self.module_file_map = {}
 
-        # Add imports (inter-file edges)
-        for imp in analysis.get("imports", []):
-            imp_name = imp.get("name")
-            if imp_name:
-                graph.add_edge(file_node, imp_name, type="import")
+    def parse_files(self):
+        code_dict = load_codebase(self.base_path)
+        for file_path, code in code_dict.items():
+            analyzer = CodeAnalyzer(code)
+            result = analyzer.analyze()
 
-        # Add function calls and class instantiations
-        for call in analysis.get("function_calls", []):
-            called_func = call.get("name")
-            if called_func and called_func not in IN_BUILT_FUNC:
-                graph.add_edge(file_node, called_func, type="calls")
+            rel_path = os.path.relpath(file_path, self.base_path)
+            module_name = rel_path.replace(os.sep, ".").replace(".py", "")
+            self.file_module_map[file_path] = module_name
+            self.module_file_map[module_name] = file_path
+            self.parsed[module_name] = result
 
-    return graph, file_to_functions
+            print(f"Parsed: {module_name}")
 
-ca=CodeAnalyzer(code)
-ast_info=ca.analyze()
-print(ast_info)
+    def build_dependency_graph(self, sort_by="function_calls"):
+        if not self.parsed:
+            self.parse_files()
+
+        module_order = list(self.parsed.keys())
+        if sort_by == "function_calls":
+            module_order = sorted(
+                self.parsed.items(),
+                key=lambda x: len(x[1].get("function_calls", [])),
+                reverse=True
+            )
+            module_order = [m[0] for m in module_order]
+        elif sort_by == "file":
+            module_order = sorted(module_order)
+
+        for module in module_order:
+            data = self.parsed[module]
+            self.graph.add_node(module)
+            print(f"\nBuilding edges for {module}")
+            print(f"  - Imports: {len(data.get('imports', []))}")
+            print(f"  - Function Calls: {len(data.get('function_calls', []))}")
+
+            # Add import edges
+            imports = sorted(data.get("imports", []), key=lambda x: x.get("module") or "")
+            for imp in imports:
+                imported = imp.get("module")
+                if imported:
+                    self.graph.add_edge(imported,module)  # reversed: imported → module
+
+            # Add function call edges
+            call_edges = []
+            for call in data.get("user_function_calls", []):
+                callee = call["name"].split(".")[0]
+                for mod, mod_data in self.parsed.items():
+                    user_funcs = {f["name"] for f in mod_data.get("functions", [])}
+                    if callee in user_funcs and mod != module:
+                        call_edges.append((mod, module, callee))  # reversed: mod → module
+
+            # Add sorted call edges
+            for src, dst, callee in sorted(call_edges, key=lambda x: x[2]):
+                self.graph.add_edge(src, dst)
+
+    def show_summary(self):
+        print(f"\nGraph built with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges.")
+        print("Modules:")
+        for node in sorted(self.graph.nodes):
+            print(f" - {node}")
+        print("Dependencies:")
+        for u, v in sorted(self.graph.edges):
+            print(f" - {u} -> {v}")
+
+    def visualize(self):
+        if not self.graph.nodes:
+            print("No nodes to visualize.")
+            return
+
+        pos = nx.spring_layout(self.graph, seed=42, k=1.8)
+
+        plt.figure(figsize=(14, 10))
+
+    # Draw edges with offset at arrowhead and tail to avoid label box overlap
+        nx.draw_networkx_edges(
+            self.graph,
+            pos,
+            arrows=True,
+            arrowstyle='->',
+            arrowsize=18,
+            width=1.5,
+            connectionstyle='arc3,rad=0.1',
+            edge_color='black',
+            node_size=3000,  # approximate node size for offset
+            min_source_margin=15,  # buffer at source
+            min_target_margin=25   # buffer at target (arrow head)
+        )
+
+    # Draw node labels with padding and visible boxes
+        nx.draw_networkx_labels(
+            self.graph,
+            pos,
+            font_size=10,
+            font_color='white',
+            bbox=dict(boxstyle="round,pad=0.5", edgecolor="black", facecolor="blue")
+        )
+
+        plt.title("Dependency Graph", fontsize=14)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+
+
+
+
+
+
+
+#ca=CodeAnalyzer()
+#ast_info=ca.analyze()
+
+#print(type(ast_info))
+a=DependencyGraph(r"C:\Users\Yatharth_Shivam\OneDrive\Documents\repos\python-mini-projects-master")
+
+
+
+a.build_dependency_graph()
+a.show_summary()
+a.visualize()
+#print_directory_structure(r"C:\Users\Yatharth_Shivam\OneDrive\Documents\repos\python-mini-projects-master")
+
