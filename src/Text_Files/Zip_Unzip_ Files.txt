@@ -1,0 +1,43 @@
+#Function: load_codebase(path)
+
+#Goal :Loads all code-related files from a folder (and its subfolders) into a dictionary.
+
+#What It Does :Imports the os module to work with folders and files.
+
+#Defines a list of allowed file types: (.py, .js, .json, .md, .yaml, .ipynb, etc.)
+
+#Makes an empty dictionary called code_files to hold:
+        Keys = file paths
+        Values = file content as text
+
+#Walks through all folders using os.walk(path):
+        root = current folder
+        _ = subfolders (not used)
+        files = list of files in that folder
+
+#For each file :Gets its extension (like ".py")
+
+#If the extension is in the allowed list:
+        Builds the full file path
+        Tries to read it using UTF-8
+        Adds the path and content to code_files
+        If the file can't be read, it shows a warning
+
+#After all files are checked:
+        Prints how many were loaded
+        Returns the code_files dictionary
+
+#Returns:
+A dictionary like
+{
+"src/main.py": "def greet():\n print('hi')",
+"docs/readme.md": "# Project Info"
+}
+
+#How To Use It:
+
+code_files = load_codebase("my_project")
+print(code_files["my_project/src/main.py"])
+You can now read the actual content of any code file.
+
+# code_files is a dictionary that contains file_path as key and actual code/contents as value.
