@@ -1,29 +1,30 @@
-import os
+import streamlit as st
 import requests
-from typing import Dict
+import os
+import zipfile
+import tempfile
+import re
+from dotenv import load_dotenv
 import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.downloader.Z_U_F import load_codebase
-from src.parser.CodeBase_CodeLine import CodebaseAnalyzer
-import threading
-import streamlit as st
 
+
+# Load environment variables
+load_dotenv()
 LLM_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-LLM_API_KEY = "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"  # Replace with your actual OpenRouter API key
-LLM_API_KEY2= "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"
-
+LLM_API_KEY = "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" 
 
 def generate_summary(code_files):
     if not LLM_API_KEY:
-        print("Error: OPENROUTER_API_KEY is not set", flush=True)
-        return "Error: OPENROUTER_API_KEY is not set", []
+        return "Error: OPENROUTER_API_KEY is not set", ["Error: OPENROUTER_API_KEY is not set"]
 
-    print("Debug: Processing codebase...", flush=True)
+    st.write("Debug: Processing codebase...")
     errors = []
     
     if not code_files:
-        print("Error: No valid code files provided", flush=True)
-        return "Error: No valid code files provided", errors
+        return "Error: No valid code files provided", ["Error: No valid code files provided"]
 
     max_file_size = 10000
     max_token_limit = 10000
@@ -57,26 +58,24 @@ def generate_summary(code_files):
     file_contents = []
     for path, content in code_files.items():
         if len(content) > max_file_size:
-            print(f"Skipping large file: {path} ({len(content)} bytes)", flush=True)
+            st.write(f"Skipping large file: {path} ({len(content)} bytes)")
             continue
         ext = os.path.splitext(path)[1][1:].lower()
         file_content = f"\nFile: {path}\n```{ext}\n{content}\n```\n"
         file_contents.append(file_content)
 
     if not file_contents:
-        print("Error: No valid files after filtering", flush=True)
-        return "Error: No valid files after filtering", errors
+        return "Error: No valid files after filtering", ["Error: No valid files after filtering"]
 
     prompt = base_prompt + "".join(file_contents)
     prompt_length_chars = len(prompt)
     estimated_tokens = prompt_length_chars // 4
-    print(f"Debug: Prompt size: {prompt_length_chars} chars (~{estimated_tokens} tokens)", flush=True)
+    st.write(f"Debug: Prompt size: {prompt_length_chars} chars (~{estimated_tokens} tokens)")
 
     if estimated_tokens > max_token_limit:
-        print(f"Error: Prompt exceeds token limit ({estimated_tokens} > {max_token_limit} tokens)", flush=True)
-        return f"Error: Prompt exceeds token limit ({estimated_tokens} > {max_token_limit} tokens)", errors
+        return f"Error: Prompt exceeds token limit ({estimated_tokens} > {max_token_limit} tokens)", [f"Error: Prompt exceeds token limit ({estimated_tokens} > {max_token_limit} tokens)"]
 
-    print("Debug: Sending summary API request...", flush=True)
+    st.write("Debug: Sending summary API request...")
     headers = {
         "Authorization": f"Bearer {LLM_API_KEY}",
         "Content-Type": "application/json",
@@ -86,31 +85,30 @@ def generate_summary(code_files):
     payload = {
         "model": "deepseek/deepseek-r1:free",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 7000,
-        "temperature": 0.7
+        "max_tokens": 1500,
+        "temperature": 0.6
     }
 
     try:
         response = requests.post(LLM_API_URL, headers=headers, json=payload)
         response.raise_for_status()
         summary = response.json().get('choices', [{}])[0].get('message', {}).get('content', 'Error: No summary returned')
-        required_sections = ["High-Level Overview", "Class-Level Breakdown", "Function-Level Breakdown", "Interdependencies and Flow", "Engineering Commentary"]
+        required_sections = ["High-Level Overview", "Class-Level Breakdown", "Function-Level Breakdown", "Interdependencies and Flow"]
         missing_sections = [s for s in required_sections if s not in summary]
         if missing_sections:
-            print(f"Warning: Missing summary sections: {', '.join(missing_sections)}", flush=True)
+            st.warning(f"Missing summary sections: {', '.join(missing_sections)}")
             errors.append(f"Missing summary sections: {', '.join(missing_sections)}")
         return summary, errors
     except requests.RequestException as e:
-        print(f"API Error Details for summary: {response.text if 'response' in locals() else 'No response'}", flush=True)
+        st.write(f"API Error Details for summary: {response.text if 'response' in locals() else 'No response'}")
         errors.append(f"Error calling OpenRouter API for summary: {e}")
         return f"Error calling OpenRouter API for summary: {e}", errors
 
 def generate_video_script(summary, errors):
     if not summary or summary.startswith("Error:"):
-        print("Error: No valid summary to generate video script", flush=True)
-        return "Error: No valid summary to generate video script", errors
+        return "Error: No valid summary to generate video script", ["Error: No valid summary to generate video script"]
 
-    print("Debug: Generating video script...", flush=True)
+    st.write("Debug: Generating video script...")
     script_prompt = (
         "You are a scriptwriter for animated engineering explainer videos. Given a technical codebase summary, create a video script for software engineers. The script should:\n"
         "- Be engaging, clear, and concise, using analogies to simplify complex concepts (e.g., compare graphs to road networks).\n"
@@ -133,7 +131,7 @@ def generate_video_script(summary, errors):
     payload = {
         "model": "deepseek/deepseek-r1:free",
         "messages": [{"role": "user", "content": script_prompt}],
-        "max_tokens": 7000,
+        "max_tokens": 1500,
         "temperature": 0.8
     }
 
@@ -142,50 +140,97 @@ def generate_video_script(summary, errors):
         response.raise_for_status()
         script = response.json().get('choices', [{}])[0].get('message', {}).get('content', 'Error: No script returned')
         word_count = len(script.split())
-        print(f"Debug: Video script word count: {word_count}", flush=True)
+        st.write(f"Debug: Video script word count: {word_count}")
         visual_cue_count = script.count('[')
         if visual_cue_count < 4:
-            print(f"Warning: Video script has only {visual_cue_count} visual cues (minimum 4 recommended)", flush=True)
+            st.warning(f"Video script has only {visual_cue_count} visual cues (minimum 4 recommended)")
             errors.append(f"Video script has only {visual_cue_count} visual cues")
         return script, errors
     except requests.RequestException as e:
-        print(f"API Error Details for video script: {response.text if 'response' in locals() else 'No response'}", flush=True)
+        st.write(f"API Error Details for video script: {response.text if 'response' in locals() else 'No response'}")
         errors.append(f"Error calling OpenRouter API for video script: {e}")
         return f"Error calling OpenRouter API for video script: {e}", errors
 
-def main():
-    codebase_path = input("Enter the path to the codebase: ").strip()
-    errors = []
-    
-    if not os.path.isdir(codebase_path):
-        print(f"Error: Invalid directory path: {codebase_path}", flush=True)
-        return
+def extract_visual_cues(script):
+    cues = re.findall(r'\[(.*?)\]', script)
+    cue_descriptions = []
+    for cue in cues:
+        if "DiGraph" in cue or "add_edge" in cue:
+            description = "Graph with nodes and directed arrows (Manim: Graph, Arrow)"
+        elif "data flow" in cue or "add_node" in cue:
+            description = "Animated data flow between nodes (Manim: Graph, AnimationGroup)"
+        elif "class hierarchy" in cue:
+            description = "Class inheritance diagram (Manim: Text, Line)"
+        else:
+            description = "General animation (e.g., flowchart or code snippet highlight)"
+        cue_descriptions.append({"Visual Cue": cue, "Animation Description": description})
+    return cue_descriptions
 
-    print("Loading codebase...", flush=True)
-    code_files = load_codebase(codebase_path)
-    if not code_files:
-        print("No valid code files found", flush=True)
-        return
+# Streamlit website configuration
+st.set_page_config(page_title="Codebase Analyzer", page_icon="📊", layout="wide")
+st.title("Codebase Analyzer")
+st.markdown("Upload a zip file containing Python (.py) files to generate a technical summary and video script for software engineers.")
 
-    print("Generating summary...", flush=True)
-    summary, summary_errors = generate_summary(code_files)
-    errors.extend(summary_errors)
-    
-    print("\n=== Codebase Summary ===\n", flush=True)
-    print(summary, flush=True)
+# File uploader for zip file
+uploaded_file = st.file_uploader("Upload a zip file containing .py files", type="zip")
 
-    print("\nGenerating video script...", flush=True)
-    script, script_errors = generate_video_script(summary, errors)
-    errors.extend(script_errors)
-    
-    print("\n=== Video Script ===\n", flush=True)
-    print(script, flush=True)
-    print("\n=======================\n", flush=True)
+if uploaded_file:
+    with st.spinner("Processing uploaded codebase..."):
+        # Create temporary directory to extract zip
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            zip_path = os.path.join(tmp_dir, "codebase.zip")
+            with open(zip_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            # Extract zip file
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                    zip_ref.extractall(tmp_dir)
+            except zipfile.BadZipFile:
+                st.error("Error: Invalid zip file")
+                st.stop()
 
-    if errors:
-        print("Debug: Errors encountered:", flush=True)
-        for err in errors:
-            print(err, flush=True)
+            # Load codebase from extracted files
+            code_files = load_codebase(tmp_dir)
+            if not code_files:
+                st.error("No valid .py files found in the zip")
+                st.stop()
 
-if __name__ == "__main__":
-    main()
+            # Generate summary
+            summary, summary_errors = generate_summary(code_files)
+            if summary.startswith("Error:"):
+                st.error(summary)
+                if summary_errors:
+                    st.subheader("Errors")
+                    for err in summary_errors:
+                        st.error(err)
+                st.stop()
+
+            # Generate video script
+            script, script_errors = generate_video_script(summary, summary_errors)
+            errors = summary_errors + script_errors
+
+            # Display results in tabs
+            tab1, tab2 = st.tabs(["Codebase Summary", "Video Script"])
+            with tab1:
+                st.subheader("Codebase Summary")
+                st.text_area("Summary", summary, height=400)
+            with tab2:
+                st.subheader("Video Script")
+                st.text_area("Script", script, height=400)
+                st.subheader("Manim Visual Cues")
+                st.markdown("The following visual cues from the script can be animated using Manim (offline rendering required).")
+                cue_df = extract_visual_cues(script)
+                if cue_df:
+                    st.table(cue_df)
+                else:
+                    st.write("No visual cues found in the script.")
+
+            # Display errors
+            if errors:
+                st.subheader("Errors")
+                for err in errors:
+                    st.error(err)
+
+else:
+    st.info("Please upload a zip file to begin analysis.")
